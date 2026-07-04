@@ -1,0 +1,14 @@
+{
+  "name": "专注提醒器",
+  "short_name": "专注提醒",
+  "description": "使用设备摄像头在本地识别可观察的分心行为并发出提醒。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#edf3ef",
+  "theme_color": "#10231d",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

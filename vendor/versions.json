@@ -1,0 +1,9 @@
+{
+  "tasksVision": "0.10.35",
+  "downloadedAt": "2026-07-04T09:01:13.722Z",
+  "sources": {
+    "package": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35",
+    "face": "Google MediaPipe Face Landmarker float16/latest",
+    "object": "Google MediaPipe EfficientDet Lite2 int8 (with Lite0 fallback)"
+  }
+}

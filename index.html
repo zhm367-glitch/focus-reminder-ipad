@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#10231d" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="专注提醒" />
+    <title>专注提醒器</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icon.svg" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="brand-mark" aria-hidden="true"><span></span></div>
+        <div class="brand-copy">
+          <strong>专注提醒器</strong>
+          <span>笔记本摄像头 · 本地 AI</span>
+        </div>
+        <div class="privacy-pill"><span></span>画面仅在本机处理</div>
+      </header>
+
+      <main class="workspace">
+        <section class="camera-panel">
+          <div class="camera-stage" id="camera-stage">
+            <video id="camera-video" autoplay playsinline muted></video>
+            <canvas id="overlay-canvas"></canvas>
+            <div id="camera-placeholder" class="camera-placeholder">
+              <div class="camera-icon">●</div>
+              <strong>摄像头尚未启动</strong>
+              <p>点击下方“启动摄像头”，首次使用请选择“允许”。</p>
+            </div>
+            <div class="stage-topbar">
+              <span id="live-badge" class="live-badge"><i></i>待机</span>
+              <span id="fps-label" class="fps-label">模型未载入</span>
+            </div>
+            <div id="reason-banner" class="reason-banner neutral">等待启动</div>
+          </div>
+
+          <div class="attention-card">
+            <div>
+              <span class="eyebrow">当前状态</span>
+              <strong id="attention-status">未开始</strong>
+              <small id="attention-detail">启动后将显示可观察行为判断</small>
+            </div>
+            <div class="countdown-ring" id="countdown-ring">
+              <span id="countdown-value">—</span>
+              <small>秒</small>
+            </div>
+          </div>
+
+          <div class="metric-grid">
+            <div class="metric"><span>人脸</span><strong id="face-metric">—</strong></div>
+            <div class="metric"><span>头部方向</span><strong id="head-metric">—</strong></div>
+            <div class="metric"><span>手机 / 玩物</span><strong id="phone-metric">—</strong></div>
+            <div class="metric"><span>本次提醒</span><strong id="alert-count">0 次</strong></div>
+          </div>
+
+          <div class="action-row">
+            <button id="start-button" class="primary-button" type="button">启动摄像头</button>
+            <button id="pause-button" class="secondary-button" type="button" disabled>暂停判断</button>
+            <button id="calibrate-button" class="secondary-button" type="button" disabled>校准正面方向</button>
+            <button id="test-sound-button" class="ghost-button" type="button">测试哔哔声</button>
+          </div>
+        </section>
+
+        <aside class="control-panel">
+          <section class="control-card">
+            <div class="card-heading">
+              <div><span class="eyebrow">判断设置</span><h2>提醒规则</h2></div>
+              <button id="reset-settings" class="text-button" type="button">恢复默认</button>
+            </div>
+
+            <label class="field-label" for="camera-select">摄像头</label>
+            <select id="camera-select" disabled><option value="">默认摄像头</option></select>
+
+            <label class="field-label" for="duration-select">持续多久才提醒</label>
+            <select id="duration-select">
+              <option value="10">10 秒（较敏感）</option>
+              <option value="20" selected>20 秒（推荐）</option>
+              <option value="30">30 秒</option>
+              <option value="45">45 秒</option>
+              <option value="60">60 秒</option>
+            </select>
+
+            <span class="field-label">转头灵敏度</span>
+            <div class="segmented" id="sensitivity-group">
+              <button type="button" data-sensitivity="low">低</button>
+              <button type="button" data-sensitivity="medium" class="active">中</button>
+              <button type="button" data-sensitivity="high">高</button>
+            </div>
+
+            <div class="range-row">
+              <span><b>提醒音量</b><em id="volume-label">55%</em></span>
+              <div class="volume-controls">
+                <button id="volume-down-button" type="button" aria-label="降低音量">−</button>
+                <input id="volume-range" type="range" min="10" max="100" value="55" />
+                <button id="volume-up-button" type="button" aria-label="提高音量">＋</button>
+              </div>
+            </div>
+
+            <label class="field-label" for="beep-count-select">提醒音响几次</label>
+            <select id="beep-count-select">
+              <option value="2" selected>2 次</option>
+              <option value="3">3 次</option>
+              <option value="4">4 次</option>
+              <option value="5">5 次</option>
+              <option value="6">6 次</option>
+              <option value="7">7 次</option>
+              <option value="8">8 次</option>
+              <option value="9">9 次</option>
+              <option value="10">10 次</option>
+            </select>
+
+            <label class="switch-row">
+              <span><b>检测手机</b><small>画面中持续出现手机时计为分心</small></span>
+              <input id="phone-toggle" type="checkbox" checked /><i></i>
+            </label>
+            <label class="switch-row">
+              <span><b>检测常见玩物</b><small>遥控器、球、玩具等；可能存在误判</small></span>
+              <input id="objects-toggle" type="checkbox" checked /><i></i>
+            </label>
+            <label class="switch-row">
+              <span><b>疑似发呆提醒</b><small>正脸或侧脸保持基本不动约30秒</small></span>
+              <input id="daze-toggle" type="checkbox" checked /><i></i>
+            </label>
+            <label class="switch-row">
+              <span><b>持续提醒</b><small>未恢复正常时每6秒重复；离开画面后停止</small></span>
+              <input id="continuous-alert-toggle" type="checkbox" /><i></i>
+            </label>
+            <label class="switch-row">
+              <span><b>显示检测框</b><small>便于调整摄像头位置</small></span>
+              <input id="boxes-toggle" type="checkbox" checked /><i></i>
+            </label>
+          </section>
+
+          <section class="control-card session-card">
+            <div class="card-heading"><div><span class="eyebrow">本次使用</span><h2>提醒记录</h2></div><button id="clear-log" class="text-button" type="button">清空</button></div>
+            <div id="event-log" class="event-log">
+              <div class="empty-log">还没有提醒记录</div>
+            </div>
+          </section>
+
+          <section class="notice-card">
+            <strong>判断范围</strong>
+            <p>“疑似发呆”和“疑似玩东西”只是可观察行为提示，不能代替人的判断，也无法准确区分思考、看题和发呆。</p>
+            <p class="ipad-install-tip">iPad 安装：用 Safari 打开本页，点“分享”→“添加到主屏幕”。</p>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status"></div>
+    <script type="module" src="app.js?v=20260704-8"></script>
+  </body>
+</html>
