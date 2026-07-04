@@ -61,7 +61,7 @@
           </div>
 
           <div class="action-row">
-            <button id="start-button" class="primary-button" type="button">启动摄像头</button>
+            <button id="start-button" class="primary-button" type="button">开启摄像头</button>
             <button id="pause-button" class="secondary-button" type="button" disabled>暂停判断</button>
             <button id="calibrate-button" class="secondary-button" type="button" disabled>校准正面方向</button>
             <button id="test-sound-button" class="ghost-button" type="button">测试哔哔声</button>
@@ -129,6 +129,10 @@
               <input id="daze-toggle" type="checkbox" checked /><i></i>
             </label>
             <label class="switch-row">
+              <span><b>保持屏幕唤醒</b><small>运行时防止自动锁屏；手动锁屏后系统仍会暂停摄像头</small></span>
+              <input id="wake-lock-toggle" type="checkbox" checked /><i></i>
+            </label>
+            <label class="switch-row">
               <span><b>持续提醒</b><small>未恢复正常时每6秒重复；离开画面后停止</small></span>
               <input id="continuous-alert-toggle" type="checkbox" /><i></i>
             </label>
@@ -148,6 +152,7 @@
           <section class="notice-card">
             <strong>判断范围</strong>
             <p>“疑似发呆”和“疑似玩东西”只是可观察行为提示，不能代替人的判断，也无法准确区分思考、看题和发呆。</p>
+            <p>系统限制：Windows 或 iPad 真正锁屏后会暂停网页摄像头。请开启“保持屏幕唤醒”，并让本页面保持在前台。</p>
             <p class="ipad-install-tip">iPad 安装：用 Safari 打开本页，点“分享”→“添加到主屏幕”。</p>
           </section>
         </aside>
@@ -155,6 +160,6 @@
     </div>
 
     <div id="toast" class="toast" role="status"></div>
-    <script type="module" src="app.js?v=20260704-11"></script>
+    <script type="module" src="app.js?v=20260705-12"></script>
   </body>
 </html>

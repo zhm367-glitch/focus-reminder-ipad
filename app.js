@@ -14,19 +14,21 @@ const elements = {
   camera: $("#camera-select"), duration: $("#duration-select"), volume: $("#volume-range"), volumeLabel: $("#volume-label"),
   volumeDown: $("#volume-down-button"), volumeUp: $("#volume-up-button"), beepCount: $("#beep-count-select"),
   phoneToggle: $("#phone-toggle"), objectsToggle: $("#objects-toggle"), dazeToggle: $("#daze-toggle"),
-  continuousToggle: $("#continuous-alert-toggle"), boxesToggle: $("#boxes-toggle"), log: $("#event-log"), toast: $("#toast"),
+  continuousToggle: $("#continuous-alert-toggle"), wakeToggle: $("#wake-lock-toggle"),
+  boxesToggle: $("#boxes-toggle"), log: $("#event-log"), toast: $("#toast"),
 };
 
 const state = {
   stream: null, faceLandmarker: null, objectDetector: null, running: false, paused: false, loading: false,
-  audioContext: null,
+  audioContext: null, activeOscillators: new Set(), alertOscillators: new Set(), wakeLock: null,
   objectDetectorUnavailable: false, objectLoading: false,
   lastFaceRun: 0, lastObjectRun: 0, lastFrameTime: 0, faceResult: null, objectResult: null,
   facePresent: false, faceSeenAt: 0, personSeenAt: 0, phoneSeenAt: 0, phoneHits: 0, distractorSeenAt: 0, distractorHits: 0,
-  yaw: 0, yawOffset: 0, lastFacePoint: null, lastMotionAt: performance.now(), lastBlinkAt: performance.now(), blinkActive: false,
+  yaw: 0, yawOffset: 0, lastFacePoint: null, lastGazePoint: null,
+  lastMotionAt: performance.now(), lastEyeMotionAt: performance.now(), lastBlinkAt: performance.now(), blinkActive: false,
   reason: "idle", candidateReason: "", candidateSince: 0, episodeAlerted: false, lastAlertAt: 0, alerts: 0, log: [],
   fpsFrames: 0, fpsStarted: performance.now(), inferenceFps: 0,
-  settings: { version: 5, duration: 20, sensitivity: "medium", volume: 55, beepCount: 2, phone: true, objects: true, daze: true, continuous: false, boxes: true },
+  settings: { version: 6, duration: 20, sensitivity: "medium", volume: 55, beepCount: 2, phone: true, objects: true, daze: true, continuous: false, keepAwake: true, boxes: true },
 };
 
 const reasonCopy = {
@@ -36,9 +38,9 @@ const reasonCopy = {
   turned: ["持续看向侧面", "头部明显偏离校准方向，达到时限后提醒", "检测到长时间转头", "warning"],
   phone: ["检测到手机", "画面中识别到手机，达到时限后提醒", "检测到手机", "warning"],
   object: ["疑似在玩东西", "识别到常见非学习物品，达到时限后提醒", "疑似在玩东西", "warning"],
-  dazed: ["疑似长时间发呆", "正脸或侧脸保持基本不动约30秒，请结合实际情况判断", "疑似发呆", "warning"],
-  absent: ["离开画面", "没有检测到人脸或人体，达到时限后提醒", "未检测到孩子", "warning"],
-  occluded: ["脸部长时间不可见", "可能持续转头、趴下或遮挡脸部，达到时限后提醒", "没有看到脸部", "warning"],
+  dazed: ["疑似长时间发呆", "头部和视线长时间基本不动，请结合实际情况判断", "疑似发呆", "warning"],
+  absent: ["离开画面", "没有检测到人脸或人体，提醒音已停止", "未检测到孩子 · 保持静音", "neutral"],
+  occluded: ["脸部暂时不可见", "检测到人体但没有清晰人脸，提醒音保持停止", "没有看到脸部 · 保持静音", "neutral"],
   paused: ["判断已暂停", "摄像头保持开启，但不会判断和提醒", "已暂停", "neutral"],
   alert: ["已发出提醒", "已播放提示音，恢复正常后才会再次提醒", "哔哔 · 请注意", "alert"],
 };
@@ -48,16 +50,17 @@ function loadSettings() {
     const saved = JSON.parse(localStorage.getItem("focus-reminder-settings"));
     if (saved) {
       Object.assign(state.settings, saved);
-      if (saved.version !== 5) {
+      if (saved.version !== 6) {
         state.settings.phone = true;
         state.settings.objects = true;
         state.settings.daze = true;
         state.settings.beepCount = 2;
         state.settings.continuous = false;
+        state.settings.keepAwake = true;
       }
     }
   } catch { /* Ignore unavailable storage. */ }
-  state.settings.version = 5;
+  state.settings.version = 6;
   elements.duration.value = String(state.settings.duration);
   elements.volume.value = String(state.settings.volume);
   elements.volumeLabel.textContent = `${state.settings.volume}%`;
@@ -66,6 +69,7 @@ function loadSettings() {
   elements.objectsToggle.checked = state.settings.objects;
   elements.dazeToggle.checked = state.settings.daze;
   elements.continuousToggle.checked = state.settings.continuous;
+  elements.wakeToggle.checked = state.settings.keepAwake;
   elements.boxesToggle.checked = state.settings.boxes;
   document.querySelectorAll("[data-sensitivity]").forEach((button) => button.classList.toggle("active", button.dataset.sensitivity === state.settings.sensitivity));
 }
@@ -79,6 +83,28 @@ function toast(message) {
   elements.toast.classList.add("show");
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => elements.toast.classList.remove("show"), 2200);
+}
+
+async function requestWakeLock() {
+  if (!state.settings.keepAwake || !state.running || document.visibilityState !== "visible") return;
+  if (!("wakeLock" in navigator)) {
+    toast("当前浏览器不支持保持唤醒，请在 Windows 中关闭自动睡眠");
+    return;
+  }
+  try {
+    if (!state.wakeLock) {
+      state.wakeLock = await navigator.wakeLock.request("screen");
+      state.wakeLock.addEventListener("release", () => { state.wakeLock = null; });
+    }
+  } catch (error) {
+    console.warn("Screen wake lock unavailable.", error);
+  }
+}
+
+async function releaseWakeLock() {
+  if (!state.wakeLock) return;
+  try { await state.wakeLock.release(); } catch { /* Already released. */ }
+  state.wakeLock = null;
 }
 
 async function createModels() {
@@ -183,8 +209,10 @@ async function startCamera(deviceId = "") {
     state.candidateReason = "";
     state.episodeAlerted = false;
     state.lastMotionAt = performance.now();
+    state.lastEyeMotionAt = performance.now();
     state.lastBlinkAt = performance.now();
     state.lastFacePoint = null;
+    state.lastGazePoint = null;
     state.phoneHits = 0;
     state.phoneSeenAt = 0;
     state.distractorHits = 0;
@@ -192,9 +220,10 @@ async function startCamera(deviceId = "") {
     elements.pause.disabled = false;
     elements.calibrate.disabled = false;
     elements.camera.disabled = false;
-    elements.start.textContent = "重新启动";
+    elements.start.textContent = "关闭摄像头";
     setReason("focused");
     requestAnimationFrame(analyzeLoop);
+    requestWakeLock();
     toast("摄像头与本地 AI 已启动");
   } catch (error) {
     console.error(error);
@@ -218,7 +247,7 @@ async function startCamera(deviceId = "") {
   } finally {
     state.loading = false;
     elements.start.disabled = false;
-    if (!state.running) elements.start.textContent = "启动摄像头";
+    if (!state.running) elements.start.textContent = "开启摄像头";
   }
 }
 
@@ -226,6 +255,29 @@ function stopStream() {
   state.running = false;
   if (state.stream) state.stream.getTracks().forEach((track) => track.stop());
   state.stream = null;
+}
+
+function turnOffCamera() {
+  stopStream();
+  stopAllBeeps();
+  releaseWakeLock();
+  video.srcObject = null;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  elements.placeholder.classList.remove("hidden");
+  elements.live.classList.remove("active");
+  elements.live.innerHTML = "<i></i>待机";
+  elements.fps.textContent = "摄像头已关闭";
+  elements.pause.disabled = true;
+  elements.calibrate.disabled = true;
+  elements.camera.disabled = true;
+  elements.pause.textContent = "暂停判断";
+  elements.start.textContent = "开启摄像头";
+  state.paused = false;
+  state.candidateSince = 0;
+  state.candidateReason = "";
+  state.episodeAlerted = false;
+  setReason("idle");
+  toast("摄像头已关闭");
 }
 
 async function populateCameras() {
@@ -274,7 +326,9 @@ function processFace(result, now) {
   state.facePresent = Boolean(landmarks?.length);
   if (!state.facePresent) {
     state.lastFacePoint = null;
+    state.lastGazePoint = null;
     state.lastMotionAt = now;
+    state.lastEyeMotionAt = now;
     state.lastBlinkAt = now;
     return;
   }
@@ -297,6 +351,40 @@ function processFace(result, now) {
   const blinking = Math.max(blinkLeft, blinkRight) > 0.45;
   if (blinking && !state.blinkActive) state.lastBlinkAt = now;
   state.blinkActive = blinking;
+
+  const leftIris = landmarks[468];
+  const rightIris = landmarks[473];
+  if (!blinking && leftIris && rightIris) {
+    const leftInner = landmarks[133], rightInner = landmarks[362];
+    const leftTop = landmarks[159], leftBottom = landmarks[145];
+    const rightTop = landmarks[386], rightBottom = landmarks[374];
+    const leftWidth = Math.max(0.005, Math.abs(leftInner.x - leftEye.x));
+    const rightWidth = Math.max(0.005, Math.abs(rightInner.x - rightEye.x));
+    const leftHeight = Math.max(0.003, Math.abs(leftBottom.y - leftTop.y));
+    const rightHeight = Math.max(0.003, Math.abs(rightBottom.y - rightTop.y));
+    const gazePoint = {
+      x: ((leftIris.x - (leftEye.x + leftInner.x) / 2) / leftWidth
+        + (rightIris.x - (rightEye.x + rightInner.x) / 2) / rightWidth) / 2,
+      y: ((leftIris.y - (leftTop.y + leftBottom.y) / 2) / leftHeight
+        + (rightIris.y - (rightTop.y + rightBottom.y) / 2) / rightHeight) / 2,
+    };
+    if (state.lastGazePoint && Math.hypot(gazePoint.x - state.lastGazePoint.x, gazePoint.y - state.lastGazePoint.y) > 0.055) {
+      state.lastEyeMotionAt = now;
+    }
+    state.lastGazePoint = gazePoint;
+  } else if (!leftIris || !rightIris) {
+    state.lastEyeMotionAt = now;
+    state.lastGazePoint = null;
+  }
+}
+
+function phoneBoxLooksValid(box) {
+  if (!box || !video.videoWidth || !video.videoHeight) return false;
+  const shortSide = Math.max(1, Math.min(box.width, box.height));
+  const longSide = Math.max(box.width, box.height);
+  const areaRatio = (box.width * box.height) / (video.videoWidth * video.videoHeight);
+  const relativeShortSide = shortSide / Math.min(video.videoWidth, video.videoHeight);
+  return longSide / shortSide <= 3.2 && areaRatio >= 0.002 && relativeShortSide >= 0.035;
 }
 
 function processObjects(result, now) {
@@ -319,7 +407,7 @@ function processObjects(result, now) {
       const noseY = nose ? nose.y * video.videoHeight : -1;
       const overlapsFaceCenter = noseX >= box.originX && noseX <= box.originX + box.width
         && noseY >= box.originY && noseY <= box.originY + box.height;
-      if (!overlapsFaceCenter) {
+      if (!overlapsFaceCenter && phoneBoxLooksValid(box)) {
         phone = true;
         phoneScore = Math.max(phoneScore, category?.score || 0);
       }
@@ -348,7 +436,7 @@ function processObjects(result, now) {
     }
   }
   if (person) state.personSeenAt = now;
-  if (phone && phoneScore >= 0.16) {
+  if (phone && phoneScore >= 0.22) {
     state.phoneHits = Math.min(5, state.phoneHits + 1);
     state.phoneScore = phoneScore;
   } else {
@@ -375,7 +463,8 @@ function evaluateAttention(now) {
   const distractorRecent = now - state.distractorSeenAt < 2500;
   const correctedYaw = state.yaw - state.yawOffset;
   const dazeCandidate = state.settings.daze && state.facePresent
-    && now - state.lastMotionAt > 5000;
+    && now - state.lastMotionAt > 5000
+    && now - state.lastEyeMotionAt > 5000;
   let reason = "focused";
   if (state.settings.phone && phoneRecent) reason = "phone";
   else if (state.settings.objects && distractorRecent) reason = "object";
@@ -384,8 +473,9 @@ function evaluateAttention(now) {
   else if (!state.facePresent && personRecent) reason = "occluded";
   else if (!state.facePresent && !personRecent) reason = "absent";
 
-  const distracting = ["phone", "object", "turned", "occluded", "absent", "dazed"].includes(reason);
+  const distracting = ["phone", "object", "turned", "dazed"].includes(reason);
   if (!distracting) {
+    stopBeep();
     state.candidateSince = 0;
     state.candidateReason = "";
     state.episodeAlerted = false;
@@ -405,13 +495,13 @@ function evaluateAttention(now) {
     state.episodeAlerted = true;
     state.lastAlertAt = now;
     state.alerts += 1;
-    playBeep();
+    playBeep(true);
     addLog(reason, Math.round(elapsed));
     setReason("alert");
   } else if (state.episodeAlerted && state.settings.continuous && reason !== "absent" && now - state.lastAlertAt >= 6000) {
     state.lastAlertAt = now;
     state.alerts += 1;
-    playBeep();
+    playBeep(true);
   } else if (silenceWhenAway) {
     setReason("absent");
   } else if (!state.episodeAlerted) {
@@ -462,8 +552,9 @@ function drawOverlay() {
     const name = (category?.categoryName || category?.displayName || "").toLowerCase();
     const objectNames = { remote: "遥控器", "sports ball": "球", "teddy bear": "玩具", frisbee: "飞盘", skateboard: "滑板", "baseball bat": "球棒", "tennis racket": "球拍" };
     const isPhone = name.includes("phone") || name.includes("mobile");
-    if (name !== "person" && !isPhone && !objectNames[name]) continue;
     const box = detection.boundingBox;
+    if (isPhone && ((category?.score || 0) < 0.22 || !phoneBoxLooksValid(box))) continue;
+    if (name !== "person" && !isPhone && !objectNames[name]) continue;
     ctx.strokeStyle = name === "person" ? "#53e3a0" : "#ffbf55";
     ctx.lineWidth = 3;
     ctx.strokeRect(box.originX, box.originY, box.width, box.height);
@@ -492,7 +583,24 @@ function ensureAudio() {
   return state.audioContext;
 }
 
-function playBeep() {
+function stopBeep() {
+  for (const oscillator of state.alertOscillators) {
+    try { oscillator.stop(); } catch { /* Already stopped. */ }
+    try { oscillator.disconnect(); } catch { /* Already disconnected. */ }
+  }
+  state.alertOscillators.clear();
+}
+
+function stopAllBeeps() {
+  stopBeep();
+  for (const oscillator of state.activeOscillators) {
+    try { oscillator.stop(); } catch { /* Already stopped. */ }
+    try { oscillator.disconnect(); } catch { /* Already disconnected. */ }
+  }
+  state.activeOscillators.clear();
+}
+
+function playBeep(asAlert = false) {
   const audio = ensureAudio();
   if (!audio) return toast("当前浏览器不支持提醒音");
   const volume = state.settings.volume / 100 * 0.22;
@@ -508,6 +616,9 @@ function playBeep() {
     gain.gain.exponentialRampToValueAtTime(Math.max(0.001, volume), start + offset + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.22);
     oscillator.connect(gain).connect(audio.destination);
+    const oscillatorSet = asAlert ? state.alertOscillators : state.activeOscillators;
+    oscillatorSet.add(oscillator);
+    oscillator.addEventListener("ended", () => oscillatorSet.delete(oscillator), { once: true });
     oscillator.start(start + offset);
     oscillator.stop(start + offset + 0.24);
   }
@@ -525,13 +636,17 @@ function renderLog() {
 }
 
 elements.start.addEventListener("click", () => {
+  if (state.running) {
+    turnOffCamera();
+    return;
+  }
   ensureAudio();
   startCamera(elements.camera.value);
 });
 elements.pause.addEventListener("click", () => {
   state.paused = !state.paused;
   elements.pause.textContent = state.paused ? "继续判断" : "暂停判断";
-  if (state.paused) { state.candidateSince = 0; state.candidateReason = ""; state.episodeAlerted = false; setReason("paused"); ctx.clearRect(0,0,canvas.width,canvas.height); }
+  if (state.paused) { stopBeep(); state.candidateSince = 0; state.candidateReason = ""; state.episodeAlerted = false; setReason("paused"); ctx.clearRect(0,0,canvas.width,canvas.height); }
   else { setReason("focused"); state.fpsStarted = performance.now(); state.fpsFrames = 0; }
 });
 elements.calibrate.addEventListener("click", () => {
@@ -541,11 +656,13 @@ elements.calibrate.addEventListener("click", () => {
   state.candidateReason = "";
   state.episodeAlerted = false;
   state.lastMotionAt = performance.now();
+  state.lastEyeMotionAt = performance.now();
   state.lastBlinkAt = performance.now();
+  state.lastGazePoint = null;
   toast("已记录当前方向为正常方向");
 });
 elements.test.addEventListener("click", () => { ensureAudio(); playBeep(); toast("已播放测试提醒音"); });
-elements.camera.addEventListener("change", () => startCamera(elements.camera.value));
+elements.camera.addEventListener("change", () => { if (state.running) startCamera(elements.camera.value); });
 elements.duration.addEventListener("change", () => { state.settings.duration = Number(elements.duration.value); saveSettings(); });
 elements.volume.addEventListener("input", () => { state.settings.volume = Number(elements.volume.value); elements.volumeLabel.textContent = `${state.settings.volume}%`; saveSettings(); });
 function changeVolume(delta) {
@@ -566,6 +683,12 @@ elements.continuousToggle.addEventListener("change", () => {
   saveSettings();
   toast(state.settings.continuous ? "已开启持续提醒；恢复正常或离开画面后停止" : "已关闭持续提醒");
 });
+elements.wakeToggle.addEventListener("change", () => {
+  state.settings.keepAwake = elements.wakeToggle.checked;
+  saveSettings();
+  if (state.settings.keepAwake) requestWakeLock();
+  else releaseWakeLock();
+});
 elements.boxesToggle.addEventListener("change", () => { state.settings.boxes = elements.boxesToggle.checked; saveSettings(); if (!state.settings.boxes) ctx.clearRect(0,0,canvas.width,canvas.height); });
 document.querySelectorAll("[data-sensitivity]").forEach((button) => button.addEventListener("click", () => {
   state.settings.sensitivity = button.dataset.sensitivity;
@@ -574,13 +697,18 @@ document.querySelectorAll("[data-sensitivity]").forEach((button) => button.addEv
 }));
 $("#clear-log").addEventListener("click", () => { state.log = []; renderLog(); });
 $("#reset-settings").addEventListener("click", () => {
-  state.settings = { version: 5, duration: 20, sensitivity: "medium", volume: 55, beepCount: 2, phone: true, objects: true, daze: true, continuous: false, boxes: true };
+  state.settings = { version: 6, duration: 20, sensitivity: "medium", volume: 55, beepCount: 2, phone: true, objects: true, daze: true, continuous: false, keepAwake: true, boxes: true };
   saveSettings(); loadSettings(); toast("已恢复默认设置");
 });
 
 window.addEventListener("beforeunload", () => {
   stopStream();
+  stopAllBeeps();
+  releaseWakeLock();
   state.audioContext?.close();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state.running && state.settings.keepAwake) requestWakeLock();
 });
 loadSettings();
 
