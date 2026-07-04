@@ -18,7 +18,7 @@ const elements = {
 const state = {
   stream: null, faceLandmarker: null, objectDetector: null, running: false, paused: false, loading: false,
   audioContext: null,
-  objectDetectorUnavailable: false,
+  objectDetectorUnavailable: false, objectLoading: false,
   lastFaceRun: 0, lastObjectRun: 0, lastFrameTime: 0, faceResult: null, objectResult: null,
   facePresent: false, faceSeenAt: 0, personSeenAt: 0, phoneSeenAt: 0, phoneHits: 0, distractorSeenAt: 0,
   yaw: 0, yawOffset: 0, lastFacePoint: null, lastMotionAt: performance.now(), lastBlinkAt: performance.now(), blinkActive: false,
@@ -80,18 +80,26 @@ function toast(message) {
 }
 
 async function createModels() {
-  if (state.faceLandmarker && (state.objectDetector || state.objectDetectorUnavailable)) return;
+  if (state.faceLandmarker) return;
   setReason("loading");
+  const appleMobile = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  elements.detail.textContent = appleMobile
+    ? "首次使用正在下载人脸模型，完成后会缓存；请稍候"
+    : "正在初始化本地视觉模型";
   const vision = await FilesetResolver.forVisionTasks("./vendor/tasks-vision/wasm");
   const faceOptions = {
-    baseOptions: { modelAssetPath: "./models/face_landmarker.task", delegate: "GPU" },
+    baseOptions: { modelAssetPath: "./models/face_landmarker.task", delegate: appleMobile ? "CPU" : "GPU" },
     runningMode: "VIDEO", numFaces: 1, minFaceDetectionConfidence: 0.55,
     minFacePresenceConfidence: 0.55, minTrackingConfidence: 0.55, outputFaceBlendshapes: true,
   };
   try {
     state.faceLandmarker = await FaceLandmarker.createFromOptions(vision, faceOptions);
-  } catch (gpuError) {
-    console.warn("Face model GPU initialization failed; retrying on CPU.", gpuError);
+  } catch (firstError) {
+    if (faceOptions.baseOptions.delegate === "CPU") {
+      throw new Error(`人脸模型无法加载：${firstError?.message || firstError?.name || "未知错误"}`);
+    }
+    console.warn("Face model GPU initialization failed; retrying on CPU.", firstError);
     faceOptions.baseOptions.delegate = "CPU";
     try {
       state.faceLandmarker = await FaceLandmarker.createFromOptions(vision, faceOptions);
@@ -99,17 +107,39 @@ async function createModels() {
       throw new Error(`人脸模型无法加载：${cpuError?.message || cpuError?.name || "未知错误"}`);
     }
   }
+
+  loadObjectModel(vision, appleMobile);
+}
+
+async function loadObjectModel(vision, appleMobile) {
+  if (state.objectDetector || state.objectLoading || state.objectDetectorUnavailable) return;
+  state.objectLoading = true;
+  elements.phone.textContent = "模型载入中";
   const objectOptions = {
-    baseOptions: { modelAssetPath: "./models/efficientdet_lite2_int8.tflite", delegate: "CPU" },
+    baseOptions: {
+      modelAssetPath: appleMobile ? "./models/efficientdet_lite0_uint8.tflite" : "./models/efficientdet_lite2_int8.tflite",
+      delegate: "CPU",
+    },
     runningMode: "VIDEO", scoreThreshold: 0.08, maxResults: 20,
   };
   try {
     state.objectDetector = await ObjectDetector.createFromOptions(vision, objectOptions);
+    elements.phone.textContent = "未检测";
+    toast("手机和玩物识别已在后台准备完成");
   } catch (accurateModelError) {
+    if (appleMobile) {
+      console.warn("Phone detection disabled because the mobile model could not load.", accurateModelError);
+      state.objectDetectorUnavailable = true;
+      elements.phoneToggle.disabled = true;
+      elements.objectsToggle.disabled = true;
+      elements.phone.textContent = "暂不可用";
+      return;
+    }
     console.warn("High-accuracy object model failed; retrying with Lite0.", accurateModelError);
     objectOptions.baseOptions.modelAssetPath = "./models/efficientdet_lite0_uint8.tflite";
     try {
       state.objectDetector = await ObjectDetector.createFromOptions(vision, objectOptions);
+      elements.phone.textContent = "未检测";
     } catch (cpuError) {
       console.warn("Phone detection disabled because the object model could not load.", cpuError);
       state.objectDetector = null;
@@ -118,6 +148,8 @@ async function createModels() {
       elements.phone.textContent = "暂不可用";
       toast("摄像头已启动；手机识别暂不可用，其他提醒功能正常");
     }
+  } finally {
+    state.objectLoading = false;
   }
 }
 
@@ -369,9 +401,10 @@ function evaluateAttention(now) {
   elements.head.textContent = state.facePresent ? (Math.abs(correctedYaw) > sensitivityThreshold() ? "偏向侧面" : "正常") : "—";
   elements.phone.textContent = state.objectDetectorUnavailable
     ? "暂不可用"
+    : (state.objectLoading ? "模型载入中"
     : (phoneRecent
       ? `手机 ${Math.round((state.phoneScore || 0) * 100)}%`
-      : (distractorRecent ? `${state.distractorLabel} ${Math.round((state.distractorScore || 0) * 100)}%` : "未检测"));
+      : (distractorRecent ? `${state.distractorLabel} ${Math.round((state.distractorScore || 0) * 100)}%` : "未检测")));
   elements.alerts.textContent = `${state.alerts} 次`;
   elements.countdown.textContent = distracting && !state.episodeAlerted ? Math.ceil(remaining) : "—";
   elements.ring.classList.toggle("warning", distracting && !state.episodeAlerted);

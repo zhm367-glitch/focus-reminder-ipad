@@ -1,14 +1,6 @@
-const CACHE_NAME = "focus-reminder-v8";
+const CACHE_NAME = "focus-reminder-v9";
 const ASSETS = [
-  "./", "./index.html", "./styles.css", "./app.js", "./manifest.webmanifest", "./icon.svg",
-  "./vendor/tasks-vision/vision_bundle.mjs",
-  "./vendor/tasks-vision/wasm/vision_wasm_internal.js",
-  "./vendor/tasks-vision/wasm/vision_wasm_internal.wasm",
-  "./vendor/tasks-vision/wasm/vision_wasm_nosimd_internal.js",
-  "./vendor/tasks-vision/wasm/vision_wasm_nosimd_internal.wasm",
-  "./models/face_landmarker.task",
-  "./models/efficientdet_lite2_int8.tflite",
-  "./models/efficientdet_lite0_uint8.tflite"
+  "./", "./index.html", "./styles.css", "./app.js", "./manifest.webmanifest", "./icon.svg"
 ];
 
 self.addEventListener("install", (event) => {
