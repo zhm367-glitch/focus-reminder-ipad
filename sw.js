@@ -1,4 +1,4 @@
-const CACHE_NAME = "focus-reminder-v13";
+const CACHE_NAME = "focus-reminder-v14";
 const ASSETS = [
   "./", "./index.html", "./styles.css", "./app.js", "./manifest.webmanifest", "./icon.svg"
 ];

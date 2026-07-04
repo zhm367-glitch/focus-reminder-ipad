@@ -24,7 +24,7 @@ const state = {
   objectDetectorUnavailable: false, objectLoading: false,
   lastFaceRun: 0, lastObjectRun: 0, lastFrameTime: 0, faceResult: null, objectResult: null,
   facePresent: false, faceSeenAt: 0, personSeenAt: 0, phoneSeenAt: 0, phoneHits: 0, distractorSeenAt: 0, distractorHits: 0,
-  yaw: 0, yawOffset: 0, roll: 0, rollOffset: 0, lastFacePoint: null, lastGazePoint: null,
+  yaw: 0, yawOffset: 0, lastFaceWasTurned: false, lastFacePoint: null, lastGazePoint: null,
   lastMotionAt: performance.now(), lastEyeMotionAt: performance.now(), lastBlinkAt: performance.now(), blinkActive: false,
   reason: "idle", candidateReason: "", candidateSince: 0, episodeAlerted: false, lastAlertAt: 0, alerts: 0, log: [],
   fpsFrames: 0, fpsStarted: performance.now(), inferenceFps: 0,
@@ -119,7 +119,7 @@ async function createModels() {
   const faceOptions = {
     baseOptions: { modelAssetPath: assetUrl("models/face_landmarker.task"), delegate: appleMobile ? "CPU" : "GPU" },
     runningMode: "VIDEO", numFaces: 1, minFaceDetectionConfidence: 0.55,
-    minFacePresenceConfidence: 0.55, minTrackingConfidence: 0.55, outputFaceBlendshapes: true,
+    minFacePresenceConfidence: 0.4, minTrackingConfidence: 0.4, outputFaceBlendshapes: true,
   };
   try {
     state.faceLandmarker = await FaceLandmarker.createFromOptions(vision, faceOptions);
@@ -213,6 +213,7 @@ async function startCamera(deviceId = "") {
     state.lastBlinkAt = performance.now();
     state.lastFacePoint = null;
     state.lastGazePoint = null;
+    state.lastFaceWasTurned = false;
     state.phoneHits = 0;
     state.phoneSeenAt = 0;
     state.distractorHits = 0;
@@ -276,6 +277,7 @@ function turnOffCamera() {
   state.candidateSince = 0;
   state.candidateReason = "";
   state.episodeAlerted = false;
+  state.lastFaceWasTurned = false;
   setReason("idle");
   toast("摄像头已关闭");
 }
@@ -337,8 +339,9 @@ function processFace(result, now) {
   const rightEye = landmarks[263];
   const nose = landmarks[1];
   const eyeDistance = Math.max(0.01, Math.abs(rightEye.x - leftEye.x));
-  state.yaw = (nose.x - ((leftEye.x + rightEye.x) / 2)) / eyeDistance;
-  state.roll = Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
+  const leftNoseDistance = Math.abs(nose.x - leftEye.x);
+  const rightNoseDistance = Math.abs(rightEye.x - nose.x);
+  state.yaw = (leftNoseDistance - rightNoseDistance) / eyeDistance;
 
   if (state.lastFacePoint) {
     const movement = Math.hypot(nose.x - state.lastFacePoint.x, nose.y - state.lastFacePoint.y);
@@ -455,11 +458,7 @@ function processObjects(result, now) {
 }
 
 function sensitivityThreshold() {
-  return { low: 0.68, medium: 0.52, high: 0.38 }[state.settings.sensitivity];
-}
-
-function rollThreshold() {
-  return { low: 0.48, medium: 0.34, high: 0.24 }[state.settings.sensitivity];
+  return { low: 0.62, medium: 0.45, high: 0.32 }[state.settings.sensitivity];
 }
 
 function evaluateAttention(now) {
@@ -467,9 +466,9 @@ function evaluateAttention(now) {
   const phoneRecent = now - state.phoneSeenAt < 3000;
   const distractorRecent = now - state.distractorSeenAt < 2500;
   const correctedYaw = state.yaw - state.yawOffset;
-  const correctedRoll = state.roll - state.rollOffset;
-  const headDeviated = Math.abs(correctedYaw) > sensitivityThreshold()
-    || Math.abs(correctedRoll) > rollThreshold();
+  const headDeviated = Math.abs(correctedYaw) > sensitivityThreshold();
+  if (state.facePresent) state.lastFaceWasTurned = headDeviated;
+  else if (!personRecent) state.lastFaceWasTurned = false;
   const dazeCandidate = state.settings.daze && state.facePresent
     && now - state.lastMotionAt > 5000
     && now - state.lastEyeMotionAt > 5000;
@@ -477,6 +476,7 @@ function evaluateAttention(now) {
   if (state.settings.phone && phoneRecent) reason = "phone";
   else if (state.settings.objects && distractorRecent) reason = "object";
   else if (state.facePresent && headDeviated) reason = "turned";
+  else if (!state.facePresent && personRecent && state.lastFaceWasTurned) reason = "turned";
   else if (dazeCandidate) reason = "dazed";
   else if (!state.facePresent && personRecent) reason = "occluded";
   else if (!state.facePresent && !personRecent) reason = "absent";
@@ -518,8 +518,8 @@ function evaluateAttention(now) {
 
   elements.face.textContent = state.facePresent ? "已检测" : (personRecent ? "被遮挡" : "未检测");
   elements.head.textContent = state.facePresent
-    ? (Math.abs(correctedRoll) > rollThreshold() ? "向肩膀歪头" : (Math.abs(correctedYaw) > sensitivityThreshold() ? "偏向侧面" : "正常"))
-    : "—";
+    ? (headDeviated ? "脸转向侧面" : "正常")
+    : (state.lastFaceWasTurned && personRecent ? "侧脸暂时不可见" : "—");
   elements.phone.textContent = state.objectDetectorUnavailable
     ? "暂不可用"
     : (state.objectLoading ? "模型载入中"
@@ -662,7 +662,7 @@ elements.pause.addEventListener("click", () => {
 elements.calibrate.addEventListener("click", () => {
   if (!state.facePresent) return toast("请先正对摄像头，确保能看到脸部");
   state.yawOffset = state.yaw;
-  state.rollOffset = state.roll;
+  state.lastFaceWasTurned = false;
   state.candidateSince = 0;
   state.candidateReason = "";
   state.episodeAlerted = false;
