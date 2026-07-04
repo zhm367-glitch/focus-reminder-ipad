@@ -463,7 +463,9 @@ function sensitivityThreshold() {
 
 function evaluateAttention(now) {
   const personRecent = now - state.personSeenAt < 1800;
-  const phoneRecent = now - state.phoneSeenAt < 3000;
+  // Object detection can briefly miss a phone between frames. Keep a short
+  // confirmation window so a simultaneous daze result cannot take priority.
+  const phoneRecent = now - state.phoneSeenAt < 5000;
   const distractorRecent = now - state.distractorSeenAt < 2500;
   const correctedYaw = state.yaw - state.yawOffset;
   const headDeviated = Math.abs(correctedYaw) > sensitivityThreshold();
@@ -488,11 +490,15 @@ function evaluateAttention(now) {
     state.candidateReason = "";
     state.episodeAlerted = false;
     state.lastAlertAt = 0;
-  } else if (!state.candidateSince || state.candidateReason !== reason) {
+  } else if (!state.candidateSince) {
     state.candidateSince = now;
     state.candidateReason = reason;
     state.episodeAlerted = false;
     state.lastAlertAt = 0;
+  } else if (state.candidateReason !== reason) {
+    // A continuous distraction is one episode. Changing from phone to daze
+    // (or another distraction) must not restart its countdown.
+    state.candidateReason = reason;
   }
 
   const elapsed = state.candidateSince ? (now - state.candidateSince) / 1000 : 0;
