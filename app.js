@@ -1,5 +1,7 @@
 import { FilesetResolver, FaceLandmarker, ObjectDetector } from "./vendor/tasks-vision/vision_bundle.mjs";
 
+const APP_BASE_URL = new URL("./", import.meta.url);
+const assetUrl = (path) => new URL(path, APP_BASE_URL).href;
 const $ = (selector) => document.querySelector(selector);
 const video = $("#camera-video");
 const canvas = $("#overlay-canvas");
@@ -87,9 +89,9 @@ async function createModels() {
   elements.detail.textContent = appleMobile
     ? "首次使用正在下载人脸模型，完成后会缓存；请稍候"
     : "正在初始化本地视觉模型";
-  const vision = await FilesetResolver.forVisionTasks("./vendor/tasks-vision/wasm");
+  const vision = await FilesetResolver.forVisionTasks(assetUrl("vendor/tasks-vision/wasm"));
   const faceOptions = {
-    baseOptions: { modelAssetPath: "./models/face_landmarker.task", delegate: appleMobile ? "CPU" : "GPU" },
+    baseOptions: { modelAssetPath: assetUrl("models/face_landmarker.task"), delegate: appleMobile ? "CPU" : "GPU" },
     runningMode: "VIDEO", numFaces: 1, minFaceDetectionConfidence: 0.55,
     minFacePresenceConfidence: 0.55, minTrackingConfidence: 0.55, outputFaceBlendshapes: true,
   };
@@ -117,7 +119,7 @@ async function loadObjectModel(vision, appleMobile) {
   elements.phone.textContent = "模型载入中";
   const objectOptions = {
     baseOptions: {
-      modelAssetPath: appleMobile ? "./models/efficientdet_lite0_uint8.tflite" : "./models/efficientdet_lite2_int8.tflite",
+      modelAssetPath: appleMobile ? assetUrl("models/efficientdet_lite0_uint8.tflite") : assetUrl("models/efficientdet_lite2_int8.tflite"),
       delegate: "CPU",
     },
     runningMode: "VIDEO", scoreThreshold: 0.08, maxResults: 20,
@@ -136,7 +138,7 @@ async function loadObjectModel(vision, appleMobile) {
       return;
     }
     console.warn("High-accuracy object model failed; retrying with Lite0.", accurateModelError);
-    objectOptions.baseOptions.modelAssetPath = "./models/efficientdet_lite0_uint8.tflite";
+    objectOptions.baseOptions.modelAssetPath = assetUrl("models/efficientdet_lite0_uint8.tflite");
     try {
       state.objectDetector = await ObjectDetector.createFromOptions(vision, objectOptions);
       elements.phone.textContent = "未检测";
