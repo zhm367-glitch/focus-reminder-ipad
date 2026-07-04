@@ -24,7 +24,7 @@ const state = {
   objectDetectorUnavailable: false, objectLoading: false,
   lastFaceRun: 0, lastObjectRun: 0, lastFrameTime: 0, faceResult: null, objectResult: null,
   facePresent: false, faceSeenAt: 0, personSeenAt: 0, phoneSeenAt: 0, phoneHits: 0, distractorSeenAt: 0, distractorHits: 0,
-  yaw: 0, yawOffset: 0, lastFaceWasTurned: false, lastFacePoint: null, lastGazePoint: null,
+  yaw: 0, yawOffset: 0, pitch: 0, pitchOffset: 0, pitchCalibrated: false, lastHeadDirection: "", lastFacePoint: null, lastGazePoint: null,
   lastMotionAt: performance.now(), lastEyeMotionAt: performance.now(), lastBlinkAt: performance.now(), blinkActive: false,
   reason: "idle", candidateReason: "", candidateSince: 0, episodeAlerted: false, lastAlertAt: 0, alerts: 0, log: [],
   fpsFrames: 0, fpsStarted: performance.now(), inferenceFps: 0,
@@ -35,7 +35,8 @@ const reasonCopy = {
   idle: ["未开始", "启动后将显示可观察行为判断", "等待启动", "neutral"],
   loading: ["正在准备", "正在载入本地视觉模型", "模型载入中", "neutral"],
   focused: ["状态正常", "面向书桌区域，未发现明显分心行为", "专注状态", "focused"],
-  turned: ["持续看向侧面", "头部明显偏离校准方向，达到时限后提醒", "检测到长时间转头", "warning"],
+  turned: ["持续看向侧面", "脸部明显向左或向右转，达到时限后提醒", "检测到长时间转头", "warning"],
+  upward: ["持续向上仰头", "头部明显向上偏离校准角度，达到时限后提醒", "检测到长时间仰头", "warning"],
   phone: ["检测到手机", "画面中识别到手机，达到时限后提醒", "检测到手机", "warning"],
   object: ["疑似在玩东西", "识别到常见非学习物品，达到时限后提醒", "疑似在玩东西", "warning"],
   dazed: ["疑似长时间发呆", "头部和视线长时间基本不动，请结合实际情况判断", "疑似发呆", "warning"],
@@ -213,7 +214,8 @@ async function startCamera(deviceId = "") {
     state.lastBlinkAt = performance.now();
     state.lastFacePoint = null;
     state.lastGazePoint = null;
-    state.lastFaceWasTurned = false;
+    state.pitchCalibrated = false;
+    state.lastHeadDirection = "";
     state.phoneHits = 0;
     state.phoneSeenAt = 0;
     state.distractorHits = 0;
@@ -277,7 +279,8 @@ function turnOffCamera() {
   state.candidateSince = 0;
   state.candidateReason = "";
   state.episodeAlerted = false;
-  state.lastFaceWasTurned = false;
+  state.pitchCalibrated = false;
+  state.lastHeadDirection = "";
   setReason("idle");
   toast("摄像头已关闭");
 }
@@ -342,6 +345,11 @@ function processFace(result, now) {
   const leftNoseDistance = Math.abs(nose.x - leftEye.x);
   const rightNoseDistance = Math.abs(rightEye.x - nose.x);
   state.yaw = (leftNoseDistance - rightNoseDistance) / eyeDistance;
+  state.pitch = (nose.y - ((leftEye.y + rightEye.y) / 2)) / eyeDistance;
+  if (!state.pitchCalibrated) {
+    state.pitchOffset = state.pitch;
+    state.pitchCalibrated = true;
+  }
 
   if (state.lastFacePoint) {
     const movement = Math.hypot(nose.x - state.lastFacePoint.x, nose.y - state.lastFacePoint.y);
@@ -458,7 +466,11 @@ function processObjects(result, now) {
 }
 
 function sensitivityThreshold() {
-  return { low: 0.62, medium: 0.45, high: 0.32 }[state.settings.sensitivity];
+  return { low: 0.38, medium: 0.27, high: 0.19 }[state.settings.sensitivity];
+}
+
+function upwardThreshold() {
+  return { low: 0.28, medium: 0.20, high: 0.14 }[state.settings.sensitivity];
 }
 
 function evaluateAttention(now) {
@@ -468,22 +480,26 @@ function evaluateAttention(now) {
   const phoneRecent = now - state.phoneSeenAt < 5000;
   const distractorRecent = now - state.distractorSeenAt < 2500;
   const correctedYaw = state.yaw - state.yawOffset;
-  const headDeviated = Math.abs(correctedYaw) > sensitivityThreshold();
-  if (state.facePresent) state.lastFaceWasTurned = headDeviated;
-  else if (!personRecent) state.lastFaceWasTurned = false;
+  const correctedPitch = state.pitch - state.pitchOffset;
+  const faceTurned = Math.abs(correctedYaw) > sensitivityThreshold();
+  const lookingUp = correctedPitch < -upwardThreshold();
+  if (state.facePresent) state.lastHeadDirection = faceTurned ? "side" : (lookingUp ? "up" : "");
+  else if (!personRecent) state.lastHeadDirection = "";
   const dazeCandidate = state.settings.daze && state.facePresent
     && now - state.lastMotionAt > 5000
     && now - state.lastEyeMotionAt > 5000;
   let reason = "focused";
   if (state.settings.phone && phoneRecent) reason = "phone";
   else if (state.settings.objects && distractorRecent) reason = "object";
-  else if (state.facePresent && headDeviated) reason = "turned";
-  else if (!state.facePresent && personRecent && state.lastFaceWasTurned) reason = "turned";
+  else if (state.facePresent && faceTurned) reason = "turned";
+  else if (state.facePresent && lookingUp) reason = "upward";
+  else if (!state.facePresent && personRecent && state.lastHeadDirection === "side") reason = "turned";
+  else if (!state.facePresent && personRecent && state.lastHeadDirection === "up") reason = "upward";
   else if (dazeCandidate) reason = "dazed";
   else if (!state.facePresent && personRecent) reason = "occluded";
   else if (!state.facePresent && !personRecent) reason = "absent";
 
-  const distracting = ["phone", "object", "turned", "dazed"].includes(reason);
+  const distracting = ["phone", "object", "turned", "upward", "dazed"].includes(reason);
   if (!distracting) {
     stopBeep();
     state.candidateSince = 0;
@@ -524,8 +540,8 @@ function evaluateAttention(now) {
 
   elements.face.textContent = state.facePresent ? "已检测" : (personRecent ? "被遮挡" : "未检测");
   elements.head.textContent = state.facePresent
-    ? (headDeviated ? "脸转向侧面" : "正常")
-    : (state.lastFaceWasTurned && personRecent ? "侧脸暂时不可见" : "—");
+    ? (faceTurned ? "脸转向侧面" : (lookingUp ? "向上仰头" : "正常"))
+    : (state.lastHeadDirection && personRecent ? "头部暂时不可见" : "—");
   elements.phone.textContent = state.objectDetectorUnavailable
     ? "暂不可用"
     : (state.objectLoading ? "模型载入中"
@@ -668,7 +684,9 @@ elements.pause.addEventListener("click", () => {
 elements.calibrate.addEventListener("click", () => {
   if (!state.facePresent) return toast("请先正对摄像头，确保能看到脸部");
   state.yawOffset = state.yaw;
-  state.lastFaceWasTurned = false;
+  state.pitchOffset = state.pitch;
+  state.pitchCalibrated = true;
+  state.lastHeadDirection = "";
   state.candidateSince = 0;
   state.candidateReason = "";
   state.episodeAlerted = false;
@@ -676,7 +694,7 @@ elements.calibrate.addEventListener("click", () => {
   state.lastEyeMotionAt = performance.now();
   state.lastBlinkAt = performance.now();
   state.lastGazePoint = null;
-  toast("已记录当前方向为正常方向");
+  toast("已记录当前正面方向和正常抬头角度");
 });
 elements.test.addEventListener("click", () => { ensureAudio(); playBeep(); toast("已播放测试提醒音"); });
 elements.camera.addEventListener("change", () => { if (state.running) startCamera(elements.camera.value); });
