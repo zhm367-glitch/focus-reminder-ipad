@@ -22,7 +22,7 @@ const state = {
   audioContext: null,
   objectDetectorUnavailable: false, objectLoading: false,
   lastFaceRun: 0, lastObjectRun: 0, lastFrameTime: 0, faceResult: null, objectResult: null,
-  facePresent: false, faceSeenAt: 0, personSeenAt: 0, phoneSeenAt: 0, phoneHits: 0, distractorSeenAt: 0,
+  facePresent: false, faceSeenAt: 0, personSeenAt: 0, phoneSeenAt: 0, phoneHits: 0, distractorSeenAt: 0, distractorHits: 0,
   yaw: 0, yawOffset: 0, lastFacePoint: null, lastMotionAt: performance.now(), lastBlinkAt: performance.now(), blinkActive: false,
   reason: "idle", candidateReason: "", candidateSince: 0, episodeAlerted: false, lastAlertAt: 0, alerts: 0, log: [],
   fpsFrames: 0, fpsStarted: performance.now(), inferenceFps: 0,
@@ -187,6 +187,8 @@ async function startCamera(deviceId = "") {
     state.lastFacePoint = null;
     state.phoneHits = 0;
     state.phoneSeenAt = 0;
+    state.distractorHits = 0;
+    state.distractorSeenAt = 0;
     elements.pause.disabled = false;
     elements.calibrate.disabled = false;
     elements.camera.disabled = false;
@@ -322,11 +324,25 @@ function processObjects(result, now) {
         phoneScore = Math.max(phoneScore, category?.score || 0);
       }
     }
-    if (distractorLabels[name] && (category?.score || 0) >= 0.12) {
+    if (distractorLabels[name] && (category?.score || 0) >= 0.18) {
       const box = detection.boundingBox;
-      const centerX = (box.originX + box.width / 2) / Math.max(1, video.videoWidth);
-      const centerY = (box.originY + box.height / 2) / Math.max(1, video.videoHeight);
-      if (centerX > 0.12 && centerX < 0.88 && centerY > 0.16) {
+      const facePoints = state.faceResult?.faceLandmarks?.[0];
+      let nearFace = false;
+      if (facePoints?.length) {
+        const xs = facePoints.map((point) => point.x * video.videoWidth);
+        const ys = facePoints.map((point) => point.y * video.videoHeight);
+        const minX = Math.min(...xs), maxX = Math.max(...xs);
+        const minY = Math.min(...ys), maxY = Math.max(...ys);
+        const faceWidth = Math.max(1, maxX - minX);
+        const faceHeight = Math.max(1, maxY - minY);
+        const centerX = box.originX + box.width / 2;
+        const centerY = box.originY + box.height / 2;
+        nearFace = centerX >= minX - faceWidth * 1.4
+          && centerX <= maxX + faceWidth * 1.4
+          && centerY >= minY - faceHeight * 0.5
+          && centerY <= maxY + faceHeight * 2;
+      }
+      if (nearFace) {
         if (!distractor || category.score > distractor.score) distractor = { label: distractorLabels[name], score: category.score };
       }
     }
@@ -340,10 +356,13 @@ function processObjects(result, now) {
   }
   if (state.phoneHits >= 3) state.phoneSeenAt = now;
   if (distractor) {
-    state.distractorSeenAt = now;
+    state.distractorHits = Math.min(4, state.distractorHits + 1);
     state.distractorLabel = distractor.label;
     state.distractorScore = distractor.score;
+  } else {
+    state.distractorHits = Math.max(0, state.distractorHits - 1);
   }
+  if (state.distractorHits >= 2) state.distractorSeenAt = now;
 }
 
 function sensitivityThreshold() {
@@ -353,7 +372,7 @@ function sensitivityThreshold() {
 function evaluateAttention(now) {
   const personRecent = now - state.personSeenAt < 1800;
   const phoneRecent = now - state.phoneSeenAt < 3000;
-  const distractorRecent = now - state.distractorSeenAt < 5000;
+  const distractorRecent = now - state.distractorSeenAt < 2500;
   const correctedYaw = state.yaw - state.yawOffset;
   const dazeCandidate = state.settings.daze && state.facePresent
     && now - state.lastMotionAt > 5000;
